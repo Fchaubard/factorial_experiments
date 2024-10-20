@@ -69,7 +69,7 @@ def format_sample_with_COT(n):
 def format_decimal(num):
     return f"{float(num):.7g}"
 
-format_sample = format_sample_with_COT #format_sample_with_COT / format_sample_no_COT
+format_sample = format_sample_with_COT # format_sample_with_instructions_and_COT / format_sample_no_COT / format_sample_with_COT
 
 # Set device to GPU cuda:0
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
