@@ -34,6 +34,8 @@ parser.add_argument('--optimizer', type=str, default='SGD', choices=optimizer_ty
 parser.add_argument('--num_batches_to_force_agreement', type=int, default=10, help='Number of batches to force agreement (must be > 1)')
 parser.add_argument('--epochs', type=int, default=10000, help='Number of training epochs')
 parser.add_argument('--num_samples_per_class_per_batch', type=int, default=1, help='Number of samples per class per batch if we are doing GAF')
+parser.add_argument('--label_error_percentage', type=float, default=0, help='Percent of the train labels in the dataset to flip to a wrong label')
+parser.add_argument('--cos_distance_thresh', type=float, default=1, help='Angle threshold on the cosine similarity if using that type of agreement filtering')
 
 # Optimizer-specific parameters
 parser.add_argument('--momentum', type=float, default=0.0, help='Momentum factor for SGD optimizer')
@@ -73,32 +75,40 @@ for param in all_params:
 
 # Example CLI commands for each optimizer type:
 # For SGD:
-# python GAF_cifar100.py --GAF True --learning_rate 0.01 --optimizer SGD --learning_rate 0.01 --momentum 0.0 --nesterov '' --weight_decay 1e-2 --weight_decay_type l2 --num_samples_per_class_per_batch 1 --num_batches_to_force_agreement 2 
+# python GAF_cifar100.py --GAF True --learning_rate 0.01 --optimizer SGD --learning_rate 0.01 --momentum 0.0 --nesterov '' --weight_decay 1e-4 --weight_decay_type l2 --num_samples_per_class_per_batch 1 --num_batches_to_force_agreement 3 --num_batches_to_force_agreement 3   --epsilon 1e1 --label_error_percentage 0.05 --cos_distance_thresh 1.0
 
 # For SGD+Nesterov:
-# python GAF_cifar100.py --GAF True --learning_rate 0.01 --optimizer "SGD+Nesterov"  --learning_rate 0.01 --momentum 0.9 --nesterov True --weight_decay 1e-2 --weight_decay_type l2 --num_samples_per_class_per_batch 2 --num_batches_to_force_agreement 3 
+# python GAF_cifar100.py --GAF True --learning_rate 0.01 --optimizer "SGD+Nesterov"  --learning_rate 0.01 --momentum 0.9 --nesterov True --weight_decay 1e-4 --weight_decay_type l2 --num_samples_per_class_per_batch 3 --num_batches_to_force_agreement 3   --epsilon 1e1 --label_error_percentage 0.05 --cos_distance_thresh 1.0
 
 # For SGD+Nesterov+val_plateau:
-# python GAF_cifar100.py --GAF True --optimizer "SGD+Nesterov+val_plateau" --scheduler_patience 100 --learning_rate 0.01 --momentum 0.99 --nesterov True --weight_decay 1e-2 --weight_decay_type l2 --num_samples_per_class_per_batch 2 --num_batches_to_force_agreement 3
+# python GAF_cifar100.py --GAF True --optimizer "SGD+Nesterov+val_plateau" --scheduler_patience 100 --learning_rate 0.01 --momentum 0.9 --nesterov True --weight_decay 1e-3 --weight_decay_type l2 --num_samples_per_class_per_batch 3 --num_batches_to_force_agreement 3 --epsilon 1e0 --label_error_percentage 0.15 --cos_distance_thresh 0.8
 
 # For Adam:
-# python  GAF_cifar100.py --optimizer Adam --learning_rate 0.001 --betas 0.9 0.999 --eps 1e-8 --weight_decay 1e-2 --GAF True --weight_decay_type l2 --num_samples_per_class_per_batch 2 --num_batches_to_force_agreement 3 
+# python  GAF_cifar100.py --GAF True --optimizer Adam --learning_rate 0.001 --betas 0.9 0.999 --eps 1e-8 --weight_decay 1e-4 --weight_decay_type l2 --num_samples_per_class_per_batch 2 --num_batches_to_force_agreement 3 --epsilon 1e1 --label_error_percentage 0.05 --cos_distance_thresh 1.0
 
 # For AdamW:
-# python GAF_cifar100.py --optimizer AdamW --learning_rate 0.005 --betas 0.9 0.999 --eps 1e-8 --weight_decay 1e-2 --GAF True --weight_decay_type l2 --num_samples_per_class_per_batch 1 --num_batches_to_force_agreement 5
+# python GAF_cifar100.py --GAF True --optimizer AdamW --learning_rate 0.001 --betas 0.9 0.999 --eps 1e-8 --weight_decay 1e-4 --weight_decay_type l1 --num_samples_per_class_per_batch 2 --num_batches_to_force_agreement 3 --epsilon 1e1  --label_error_percentage 0.05 --cos_distance_thresh 0.4
 
 # For RMSProp:
-# python GAF_cifar100.py --optimizer RMSProp --learning_rate 0.01 --alpha 0.99 --eps 1e-8 --weight_decay 1e-2 --momentum 0.0 --centered False --GAF True --weight_decay_type l2 --num_samples_per_class_per_batch 2 --num_batches_to_force_agreement 3 
+# python GAF_cifar100.py --GAF True --optimizer RMSProp --learning_rate 0.01 --alpha 0.99 --eps 1e-8 --weight_decay 1e-4 --momentum 0.0 --centered False --weight_decay_type l2 --num_samples_per_class_per_batch 3 --num_batches_to_force_agreement 3 --label_error_percentage 0.05 --cos_distance_thresh 1.0
 
+
+
+
+# Check device for the model device
+if torch.cuda.is_available():
+    num_gpus = torch.cuda.device_count()
+    device_index = random.randint(0, num_gpus - 1)  # Pick a random device index
+    device = torch.device(f"cuda:{device_index}")
+else:
+    device = torch.device("cpu")
+
+print(f"Using device: {device}")
 
 # Set random seeds for reproducibility
 torch.manual_seed(0)
 np.random.seed(0)
 random.seed(0)
-
-# Check device for the model device
-device = torch.device("cuda:5" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
 
 # Data transformations
 transform_train = transforms.Compose([
@@ -141,6 +151,23 @@ def sample_iid_mbs(full_dataset, class_indices, batch_size):
     batch = Subset(full_dataset, batch_indices)
     return batch
 
+def flip_labels(train_dataset, label_error_percentage=0.1, num_classes=100):
+    
+    num_samples = len(train_dataset.targets)
+    num_to_flip = int(label_error_percentage * num_samples)
+    all_indices = list(range(num_samples))
+    flip_indices = random.sample(all_indices, num_to_flip)
+
+    for idx in flip_indices:
+        original_label = train_dataset.targets[idx]
+        # Exclude the original label to ensure the label is actually changed
+        wrong_labels = list(range(num_classes))
+        wrong_labels.remove(original_label)
+        new_label = random.choice(wrong_labels)
+        train_dataset.targets[idx] = new_label
+
+    return train_dataset
+    
 def sample_iid_mbs_for_GAF(full_dataset, class_indices, n):
     """
     Samples n independent minibatches, each containing an equal number of samples from each class.
@@ -164,8 +191,8 @@ def sample_iid_mbs_for_GAF(full_dataset, class_indices, n):
     batches = [Subset(full_dataset, batch_indices) for batch_indices in batch_indices_list]
     return batches
 
-# Gradient Agreement Filtering function (GAF)
-def filter_gradients(G1, G2, epsilon=config['epsilon']):
+# Gradient Agreement Filtering function (GAF) based on sign agreement
+def filter_gradients_sign(G1, G2, epsilon=config['epsilon']):
     filtered_grad = []
     masked = []
     total = []
@@ -179,6 +206,28 @@ def filter_gradients(G1, G2, epsilon=config['epsilon']):
         total.append(torch.numel(mask))
     gaf_percentage = (sum(masked) / sum(total)).item() * 100
     return filtered_grad, gaf_percentage
+
+# Gradient Agreement Filtering function (GAF) based on cosine sim
+def filter_gradients_cosine_sim(G1, G2, cos_distance_thresh):
+    # Flatten G1 and G2 into vectors
+    G1_flat = torch.cat([g1.view(-1) for g1 in G1])
+    G2_flat = torch.cat([g2.view(-1) for g2 in G2])
+
+    # Compute cosine similarity
+    cos_sim = torch.nn.functional.cosine_similarity(G1_flat, G2_flat, dim=0)
+
+    # Compute cosine distance
+    cos_distance = 1 - cos_sim
+
+    # If cos_distance > cos_distance_thresh, filtered_grad == None
+    if cos_distance > cos_distance_thresh:
+        filtered_grad = None
+    else:
+        # Compute average of G1 and G2
+        filtered_grad = [(g1 + g2) / 2 for g1, g2 in zip(G1, G2)]
+
+    return filtered_grad, cos_distance.item()
+
 
 def compute_gradients(b, optimizer, model, criterion, device):
     loader = DataLoader(b, batch_size=len(b), shuffle=False)
@@ -276,7 +325,7 @@ test_loader = DataLoader(test_dataset, batch_size=config['batch_size'], shuffle=
 # Set up WandB project and run names
 model_name = 'ResNet18'
 dataset_name = 'CIFAR100'
-project_name = f"{model_name}_{dataset_name}"
+project_name = f"{model_name}_{dataset_name}_FLIPPED_LABELS_COSINE_SIM"
 name_prefix = 'GAF' if config['GAF'] else 'NO_GAF'
 run_name = f"{name_prefix}_opt_{config['optimizer']}_lr_{config['learning_rate']}_bs_{config['batch_size']}"
 
@@ -287,6 +336,12 @@ config = wandb.config
 # Create checkpoints directory
 checkpoint_dir = './checkpoints/'
 os.makedirs(checkpoint_dir, exist_ok=True)
+
+if config['label_error_percentage'] and config['label_error_percentage']>0:
+    if config['label_error_percentage']<1:
+        train_dataset = flip_labels(train_dataset, label_error_percentage=config['label_error_percentage'], num_classes=len(class_indices))
+    else:
+        raise ValueError(f"label_error_percentage needs to be between 0 and 1. Given label_error_percentage={config['label_error_percentage']}")
 
 # Training loop
 for epoch in range(config['epochs']):
@@ -319,25 +374,33 @@ for epoch in range(config['epochs']):
 
             # Compute gradients in parallel
             G_current, loss, labels, outputs = compute_gradients(first_batch, optimizer, model, criterion, device)
+            agreed_count = 0
             for i, b in enumerate(batches[1:]):
                 G, loss, labels, outputs = compute_gradients(b, optimizer, model, criterion, device)
-                G_current, gaf_percentage = filter_gradients(G_current, G, epsilon=config['epsilon'])
+                # G_current, gaf_percentage = filter_gradients_cosine_sign(G_current, G, epsilon=config['epsilon'])
+                G_current_temp, cosine_distance = filter_gradients_cosine_sim(G_current, G, config['cos_distance_thresh'])
+                
+                if G_current_temp!=None:
+                    G_current = G_current_temp
+                    agreed_count+=1
                 # Log gaf_percentage, iteration, and fuse iter i to wandb
-                # try:
-                #     wandb.log({'gaf_percentage': gaf_percentage, 'iteration': iteration, 'fuse_iter': i})
-                # except Exception as e:
-                #     print(f"Failed to log to wandb: {e}")
-                print(f"iteration {iteration}, fuse iter {i}, Gradient Agreement Percentage: {gaf_percentage:.2f}%")
-            # Apply filtered gradients
-            with torch.no_grad():
-                for param, grad in zip(model.parameters(), G_current):
-                    param.grad = grad
-            optimizer.step()
-            # Update metrics
-            running_loss += loss.item() * labels.size(0)
-            _, predicted = torch.max(outputs.data, 1)
-            total += labels.size(0)
-            correct_top1 += (predicted == labels).sum().item()
+                try:
+                    wandb.log({'cosine_distance': cosine_distance, 'iteration': iteration, 'fuse_iter': i})
+                except Exception as e:
+                    print(f"Failed to log to wandb: {e}")
+                print(f"iteration {iteration}, fuse iter {i}, Gradient Agreement cosine_distance: {cosine_distance:.2f} with thresh {config['cos_distance_thresh']}")
+                
+            if agreed_count>0:
+                # Atleast 1 of the gradients agreed with the first, lets apply the filtered gradients
+                with torch.no_grad():
+                    for param, grad in zip(model.parameters(), G_current):
+                        param.grad = grad
+                optimizer.step()
+                # Update metrics
+                running_loss += loss.item() * labels.size(0)
+                _, predicted = torch.max(outputs.data, 1)
+                total += labels.size(0)
+                correct_top1 += (predicted == labels).sum().item()
         else:
             # Sample a minibatch for standard training
             batch = sample_iid_mbs(train_dataset, class_indices, config['batch_size'])
@@ -363,7 +426,8 @@ for epoch in range(config['epochs']):
         iteration += 1
 
     # Perform validation every num_val_epochs iterations
-    if epoch % config['num_val_epochs'] == 0:
+    if epoch % config['num_val_epochs'] == 0 and total>0:
+        
         train_loss = running_loss / total
         train_accuracy = correct_top1 / total
         val_loss, val_accuracy = evaluate(model, test_loader, device)
